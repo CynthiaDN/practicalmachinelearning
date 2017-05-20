@@ -9,22 +9,204 @@ output: html_document
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## R Markdown
-
-This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
-
-When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
-
-```{r cars}
-summary(cars)
+```{r}
+library(caret)
+library(corrplot)
+library(rpart)
+library(rpart)
+library(randomForest)
+library(parallel)
+library(doParallel)
+library(ggplot2)
+library(lattice)
 ```
 
-## Including Plots
+### project course 8
 
-You can also embed plots, for example:
+class-variabele voorspellen
+schrijf een rapport over hoe je het model hebt gebouwd
+hoe je cross validation hebt gebruikt
+wat je denkt dat de out of sample error is
+waarom heb je de keuzes gemaakt die je hebt gemaakt.
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+Data
+
+The training data for this project are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv
+
+The test data are available here:
+
+https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv
+
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har. If you use the document you create for this class for any purpose please cite them as they have been very generous in allowing their data to be used for this kind of assignment.
+
+What you should submit
+
+The goal of your project is to predict the manner in which they did the exercise. This is the "classe" variable in the training set. You may use any of the other variables to predict with. You should create a report describing how you built your model, how you used cross validation, what you think the expected out of sample error is, and why you made the choices you did. You will also use your prediction model to predict 20 different test cases.
+
+Peer Review Portion
+
+Your submission for the Peer Review portion should consist of a link to a Github repo with your R markdown and compiled HTML file describing your analysis. Please constrain the text of the writeup to < 2000 words and the number of figures to be less than 5. It will make it easier for the graders if you submit a repo with a gh-pages branch so the HTML page can be viewed online (and you always want to make it easy on graders :-).
+
+Course Project Prediction Quiz Portion
+
+Apply your machine learning algorithm to the 20 test cases available in the test data above and submit your predictions in appropriate format to the Course Project Prediction Quiz for automated grading.
+
+Reproducibility
+
+Due to security concerns with the exchange of R code, your code will not be run during the evaluation by your classmates. Please be sure that if they download the repo, they will be able to view the compiled HTML version of your analysis.
+
+
+# read the data and replace "NA", "#DIV/0!", "" by NA (160 columns)
+
+```{r}
+training <- read.csv(url("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv"), na.strings=c("NA","#DIV/0!", ""))
+testing <- read.csv(url("https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv"),  na.strings=c("NA","#DIV/0!", ""))
 ```
 
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+# cleaning data
+
+remove NA-columns (60 columns left)
+remove columns that will not explain the outcome variable: X, user_name, raw_timestamp_part_1, raw_timestamp_part_2, cvdt_timestamp, new_window, num_window (53 columns left)
+
+```{r}
+
+training <- training[,colSums(is.na(training))==0]
+testing <- testing[,colSums(is.na(testing))==0]
+
+training <- training[,-c(1:7)]
+testing <- testing[,-c(1:7)]
+
+```
+
+# split the data
+
+ I split the trainingsset in a testset and a trainingset (train). The dataset isn't big and isn't small so the trainingsset contains 60% of the data and the testset 40%.
+
+```{r}
+
+set.seed(123)
+inTrain <- createDataPartition(y=training$classe, p = 0.60, list=FALSE)
+train <- training[inTrain,]
+test <- training[-inTrain,]
+dim(train)
+dim(test)
+
+```
+
+# explore the data
+
+ balance in outcomes? yes!
+
+```{r}
+table(train$classe)
+
+```
+
+
+ near zero variable; there are no near zero var. left
+
+```{r}
+nzv <- nearZeroVar(train, saveMetrics=TRUE)
+nzv
+```
+how about correlations/multicollinearity? : a lot of blue -> multicollinearity
+
+```{r}
+
+corrplot(cor(train[,-53]), method="color")
+
+```
+let's have a look at the first 13 rows
+```{r}
+
+corrplot(cor(train[,c(1:13)]), method="color")
+
+```
+
+
+# make a model
+
+classification model: Tree. this model is not accurate (was aspected because of multicollinearity)
+
+```{r}
+modFitT <- train(classe ~ ., method = "rpart", data=train)
+finModT <- modFitT$finalModel
+print(modFitT)
+
+```
+
+# classification model: random forest
+
+let's try a random forest-model. This model can handle multicollinearity.
+
+short discription:
+the random forest-model creates a lot of trees. Each tree is build on a different sample of the data (bootstrapping). A each node of the tree is using a random set of m variables that may contribute to the split. The trees are voted to predict an outcome.
+
+
+Because it's very slow we use clusters.
+
+The chosen resampling method is cross validation (10-fold).
+
+cv 5-fold: accuracy 0,99 
+almost the same as 10-fold. for k=10 the bias-variance balance is a little bit beter.
+also cv 30-fold has almost the same accuracy
+The model seems to be stable. I use k=10.
+
+```{r}
+set.seed(123)
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+
+
+fitControl <- trainControl(method = "cv",
+                           number = 10,
+                           allowParallel = TRUE)
+
+modFitRf <- train(classe ~ ., method = "rf", data=train, trControl=fitControl)
+
+stopCluster(cluster)
+registerDoSEQ()
+
+```
+
+confusionmatrix:
+
+```{r}
+finModRf <- modFitRf$finalModel
+finModRf
+```
+
+rf performs good and is accurate: 0,9907
+
+```{r}
+print(modFitRf)
+
+``` 
+
+#out of sample error
+the accuracy of the testset is 0,9916 (see the statistics)
+the out of sample error is 1-0,9916 =0,0084
+the accuracy of the testset is (higer than)almost) the same as the accuracy of the train-set
+```{r}
+pred <- predict(modFitRf, test)
+confusionMatrix(pred, test$classe)
+
+```
+
+# the most important variables
+
+```{r}
+varImp(modFitRf)
+
+```
+
+
+# now we predict on the testingset
+
+```{r}
+predT <- predict(modFitRf, testing)
+predT
+
+```
